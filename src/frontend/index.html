@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Todo App</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/vue@2"></script>
+</head>
+<body>
+    <div id="app">
+        <div v-if="!username">
+            <h1>Login</h1>
+            <input type="text" v-model="usernameInput" placeholder="Enter your username">
+            <button @click="login">Login</button>
+        </div>
+        <div v-else>
+            <h1>Todo List</h1>
+            <button @click="showModal = true">Add Todo</button>
+            <button class="delete-all" @click="deleteAllTasks">Delete All Tasks</button>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Task Description</th>
+                        <th>Created By</th>
+                        <th>Completed On</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="todo in todos" :key="todo.Id" :class="{ completed: todo.completed }">
+                        <td>{{ todo.taskDescription }}</td>
+                        <td>{{ new Date(todo.createdBy).toLocaleString() }}</td>
+                        <td>{{ todo.completed ? new Date(todo.completedOn).toLocaleString() : 'Not Completed' }}</td>
+                        <td>
+                            <button :disabled="todo.completed" 
+                                    :class="{ 'disabled-button': todo.completed }"
+                                     @click="toggleComplete(todo.id)">Complete</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Modal -->
+        <div v-if="showModal" class="modal">
+            <div class="modal-content">
+                <span class="close" @click="showModal = false">&times;</span>
+                <h2>Add New Todo</h2>
+                <input type="text" v-model="newTodo" placeholder="New Todo">
+                <button @click="addTodo">Add Todo</button>
+            </div>
+        </div>
+    </div>
+    <script src="js/app.js"></script>
+</body>
+</html>

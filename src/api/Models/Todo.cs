@@ -8,4 +8,9 @@ public class Todo
     public string Username { get; set; }
     public DateTime CreatedBy { get; set; }
     public DateTime? CompletedOn { get; set; }
+
+    public Todo()
+    {
+
+    }
 }

@@ -1,6 +1,18 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Distributed;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration["RedisCnxString"];
+});
+
+if (!builder.Environment.IsDevelopment())
+{
+    builder.Services.AddApplicationInsightsTelemetry();
+}
 
 builder.Services.AddSingleton<ITaskRepository, TaskRepository>();
 
@@ -18,9 +30,7 @@ app.UseSwaggerUI();
 
 app.UseHttpsRedirection();
 
-var todoDictionary = new Dictionary<string, Todo>();
-
-app.MapPost("/todo", async ([FromBody] Todo newTodo, ITaskRepository taskRepository) =>
+app.MapPost("/todo", async ([FromBody] Todo newTodo, IDistributedCache cache, ITaskRepository taskRepository) =>
 {
     newTodo.Id = Guid.NewGuid().ToString();
     newTodo.Username = newTodo.Username;
@@ -29,54 +39,36 @@ app.MapPost("/todo", async ([FromBody] Todo newTodo, ITaskRepository taskReposit
 
     await taskRepository.CreateAsync(newTodo);
 
-    //todoDictionary[newTodo.Id] = newTodo;
+    // Save the todo in the cache
+    // Get all from cache    
+    List<Todo>? userTodos = await GetTodosByUsername(newTodo.Username, cache);
+    userTodos?.Add(newTodo);
+
+    await cache.SetStringAsync(newTodo.Username, JsonSerializer.Serialize(userTodos));
+
     return Results.Created($"/todo/{newTodo.Id}", newTodo);
 })
 .WithName("CreateTodo")
 .WithOpenApi(); ;
 
-app.MapGet("/todo/{username}", async (ITaskRepository taskRepository, string username) =>
+app.MapGet("/todo/{username}", async (ITaskRepository taskRepository, IDistributedCache cache, string username) =>
 {
-    var userTodos = await taskRepository.GetByUserAsync(username);
+    // Validate cache first
+    List<Todo>? userTodos = await GetTodosByUsername(username, cache);
 
-    //var userTodos = todoDictionary.Values.Where(todo => todo.Username == username).ToList();
+    if (userTodos == null)
+    {
+        userTodos = await taskRepository.GetByUserAsync(username);
+        await cache.SetStringAsync(username, JsonSerializer.Serialize(userTodos));
+    }
+
     return Results.Ok(userTodos);
 })
 .WithName("GetTodoByUsername")
 .WithOpenApi(); ;
 
-// app.MapPut("/todo/{id}", async (ITaskRepository taskRepository, string id, [FromBody] Todo updatedTodo) =>
-// {
-//     var existingTodo = await taskRepository.GetAsync(id, updatedTodo.Username);
-
-//     if (existingTodo == null)
-//     {
-//         return Results.NotFound();
-//     }
-
-//     existingTodo.TaskDescription = updatedTodo.TaskDescription;
-//     existingTodo.Completed = updatedTodo.Completed;
-
-//     await taskRepository.UpdateAsync(id, existingTodo);
-
-//     return Results.Ok(existingTodo);
-
-
-//     // if (todoDictionary.ContainsKey(id))
-//     // {
-//     //     var existingTodo = todoDictionary[id];
-//     //     existingTodo.TaskDescription = updatedTodo.TaskDescription;
-//     //     existingTodo.Completed = updatedTodo.Completed;
-//     //     return Results.Ok(existingTodo);
-//     // }
-//     //return Results.NotFound();
-// })
-// .WithName("GetTodoById")
-// .WithOpenApi(); ;
-
-app.MapPost("/todo/completed/{id}/{username}", async (ITaskRepository taskRepository, string id, string username) =>
+app.MapPost("/todo/completed/{id}/{username}", async (ITaskRepository taskRepository, IDistributedCache cache, string id, string username) =>
 {
-
     var existingTodo = await taskRepository.GetAsync(id, username);
 
     if (existingTodo == null)
@@ -89,26 +81,55 @@ app.MapPost("/todo/completed/{id}/{username}", async (ITaskRepository taskReposi
 
     await taskRepository.UpdateAsync(id, existingTodo);
 
+    // Update cache
+    List<Todo>? userTodos = await GetTodosByUsername(username, cache);
+    if (userTodos != null)
+    {
+        var todo = userTodos.FirstOrDefault(t => t.Id == id);
+        if (todo != null)
+        {
+            todo.Completed = true;
+            todo.CompletedOn = existingTodo.CompletedOn;
+            userTodos[userTodos.IndexOf(todo)] = todo;
+            await cache.SetStringAsync(username, JsonSerializer.Serialize(userTodos));
+        }
+    }
+
     return Results.Ok(existingTodo);
 
 })
 .WithName("CompleteTodo")
 .WithOpenApi();
 
-app.MapDelete("/todo/{username}", async (ITaskRepository taskRepository, string username) =>
+app.MapDelete("/todo/{username}", async (ITaskRepository taskRepository, IDistributedCache cache, string username) =>
 {
+    try
+    {
+        await cache.RemoveAsync(username);
+    }
+    catch (System.Exception)
+    {
+
+    }
     await taskRepository.DeleteAllTaskByUsernameAsync(username);
     return Results.NoContent();
-
-    //var userTodos = todoDictionary.Values.Where(todo => todo.Username == username).ToList();
-    // foreach (var todo in userTodos)
-    // {
-    //     todoDictionary.Remove(todo.Id);
-    // }
-    //return Results.NoContent();
 })
 .WithName("DeleteAllTasks")
 .WithOpenApi();
 
 app.Run();
 
+async Task<List<Todo>?> GetTodosByUsername(string username, IDistributedCache cache)
+{
+    try
+    {
+        var todos = await cache.GetStringAsync(username);
+        var userTodos = todos == null ? new List<Todo>() : JsonSerializer.Deserialize<List<Todo>>(todos);
+        return userTodos;
+    }
+    catch (System.Exception)
+    {
+        return null;
+    }
+
+}
